@@ -146,7 +146,7 @@ export class QuietOutline extends Plugin {
 		// remove states from closed notes
 		this.registerEvent(this.app.workspace.on("layout-change", () => {
 			const leaves = this.app.workspace.getLeavesOfType("markdown");
-			let filteredStates: Record<string, string[]> = {};
+			const filteredStates: Record<string, string[]> = {};
 			leaves.forEach((leaf) => {
 				const path = (leaf.view as MarkdownView).file.path;
 				this.heading_states[path] && 
@@ -171,33 +171,34 @@ export class QuietOutline extends Plugin {
 		this.registerEvent(this.app.workspace.on('quiet-outline:canvas-selection-change', (selection: Set<CanvasComponent>) => {
 			// if selection change to 0 or more than 1, return to canvas view
 			if (selection.size === 0 || selection.size > 1) {
-				let view = this.app.workspace.getActiveFileView();
+				const view = this.app.workspace.getActiveFileView();
 				if (!view) return;
 				this.changeCurrentView(view, view.getViewType());
 				return;
 			}
 
 			// if selection is only 1 textNode or md fileNode, show md outline
-			let component = [...selection][0];
+			// const component = [...selection][0];
+			const component =  Array.from(selection)[0];
 			if (!component.hasOwnProperty("nodeEl")) return;
 
-			let node = component as CanvasNode;
+			const node = component as CanvasNode;
 			
 			if (node.unknownData.type === "file" && (node as CanvasFileNode).file.extension === "md") {
-				let view = (node as CanvasFileNode).child as EmbedMarkdownView;
+				const view = (node as CanvasFileNode).child as EmbedMarkdownView;
 				this.changeCurrentView(view, "embed-markdown-file");
 				return;
 			}
 
 			if (node.unknownData.type === "text" ) {
-				let view = (node as CanvasTextNode).child;
+				const view = (node as CanvasTextNode).child;
 				this.changeCurrentView(view, "embed-markdown-text")
 				return;
 			}
 		}))
 
 		this.registerEvent(this.app.workspace.on('active-leaf-change', async (leaf) => {
-			let view = this.app.workspace.getActiveFileView();
+			const view = this.app.workspace.getActiveFileView();
 			if (!view || view !== leaf.view) {
 				return;
 			}
@@ -269,7 +270,7 @@ export class QuietOutline extends Plugin {
 		}
 
 		// @ts-ignore
-		let path = view.file?.path;
+		const path = view.file?.path;
 
 		// 保证第一次获取标题信息时，也能正常展开到默认层级
 		if (!this.current_note) {
@@ -315,7 +316,7 @@ export class QuietOutline extends Plugin {
 			id: "quiet-outline-focus-input",
 			name: "Focus on input",
 			callback: () => {
-				let input = document.querySelector("input.n-input__input-el") as HTMLInputElement;
+				const input = document.querySelector("input.n-input__input-el") as HTMLInputElement;
 				if (input) {
 					input.focus();
 				}
@@ -354,7 +355,7 @@ export class QuietOutline extends Plugin {
 								return num.toString()
 							}
 						}
-						let match = key.match(/num-nest\[(.*?)\]/);
+						const match = key.match(/num-nest\[(.*?)\]/);
 
 						if(match) {
 							const sep = match[1];
@@ -367,7 +368,7 @@ export class QuietOutline extends Plugin {
 					return merge(parts, fields).join("");
 				}
 
-				let nums = [0, 0, 0, 0, 0, 0];
+				const nums = [0, 0, 0, 0, 0, 0];
 				const headers: string[] = [];
 				store.headers.forEach((h) => {
 					nums.forEach((num, i) => {
@@ -427,7 +428,7 @@ export class QuietOutline extends Plugin {
 export function dummyJump(plugin: QuietOutline, key: number) {}
 
 function markdownJump(plugin: QuietOutline, key: number) {
-    let line: number = store.headers[key].position.start.line;
+    const line: number = store.headers[key].position.start.line;
 
     // const view = store.plugin.app.workspace.getActiveViewOfType(MarkdownView)
     const view = plugin.current_note as MarkdownView;
@@ -459,7 +460,7 @@ function kanbanJump(plugin: QuietOutline, key: number) {
 }
 
 function canvasJump(plugin: QuietOutline, key: number) {
-	let view = plugin.current_note;
+	const view = plugin.current_note;
 	if (!(view instanceof FileView) || view.getViewType() !== "canvas") {
 		throw new Error("Not in canvas view");
 	}
@@ -475,12 +476,12 @@ function canvasNodesToHeaders(nodes: AllCanvasNodeData[]): Heading[] {
 	// const groups = nodes.filter(node => node.type === "group").sort((a, b) => - cmpArea(a, b));
 	const nodesDec = nodes.slice().sort((a, b) => - cmpArea(a, b));
 
-	let trees: TreeNode[] = [];
+	const trees: TreeNode[] = [];
 	for(let i = 0; i < nodesDec.length; i++) {
 		insert(trees, nodesDec[i]);
 	}
 
-	let heads: Heading[] = []
+	const heads: Heading[] = []
 	traverse(trees, 1, (node, level) => {
 		heads.push({
 			level,
