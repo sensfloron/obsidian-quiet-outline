@@ -1,11 +1,11 @@
 import {
 	Constructor,
+	App,
 	debounce,
 	FileView,
 	MarkdownView,
 	Notice,
 	Plugin,
-	HeadingCache,
 	CanvasView,
 	Canvas,
 	CanvasComponent,
@@ -16,6 +16,7 @@ import {
 	Editor,
 	MarkdownPreviewRenderer,
 	request,
+	View,
 } from 'obsidian';
 import { AllCanvasNodeData } from "obsidian/canvas";
 
@@ -31,6 +32,15 @@ import { around } from "monkey-around"
 type LegalViewType = EmbedMarkdownView | FileView
 type LegalViewName = "markdown" | "kanban" | "canvas" | "embed-markdown-file" | "embed-markdown-text";
 
+type OpenEpubHeading = {
+	id: string;
+	level: number;
+	lable: string;
+	href: string;
+	isActive: boolean;
+	index: number
+}
+
 export class QuietOutline extends Plugin {
 	settings: QuietOutlineSettings;
 	current_note: LegalViewType;
@@ -39,11 +49,18 @@ export class QuietOutline extends Plugin {
 	jumping: boolean;
 	heading_states: Record<string, string[]> = {};
 	klasses: Record<string, Constructor<any>> = {};
-	
+
 	allow_scroll = true;
 	block_scroll: () => void;
 	allow_cursor_change = true;
 	block_cursor_change: () => void;
+
+	readDirectoryData(directoryObject: OpenEpubHeading[]) {
+		// 后续处理逻辑
+		console.debug("event > quiet-outline:epub-loaded")
+		store.headers = this.cutOpenEpubHeadingsToHeadings(directoryObject)
+	}
+
 
 	async onload() {
 		await this.loadSettings();
@@ -60,37 +77,40 @@ export class QuietOutline extends Plugin {
 			VIEW_TYPE,
 			(leaf) => new OutlineView(leaf, this)
 		);
-		
+
 		this.registerListener();
 
 		this.registerCommand();
 
 		this.addSettingTab(new SettingTab(this.app, this));
-		
+
 		this.registerExt();
-		
+
 		// only manually activate view when first time install
 		// @ts-ignore
-		if(__IS_DEV__ || await this.firstTimeInstall()) {
+		if (__IS_DEV__ || await this.firstTimeInstall()) {
 			this.activateView();
 		}
-		
+
 		this.block_scroll = debounceCb(
-			() => { this.allow_scroll = false; }, 
-			300, 
-			() => { this.allow_scroll = true; }, 
+			() => { this.allow_scroll = false; },
+			300,
+			() => { this.allow_scroll = true; },
 		);
 		this.block_cursor_change = debounceCb(
 			() => { this.allow_cursor_change = false; },
 			300,
 			() => { this.allow_cursor_change = true; },
 		);
+
+
 	}
-	
+
 	async firstTimeInstall() {
 		const existSettingFile = await this.app.vault.adapter.exists(this.manifest.dir + "/data.json");
 		return !existSettingFile
 	}
+
 
 	initStore() {
 		store.headers = [];
@@ -115,53 +135,64 @@ export class QuietOutline extends Plugin {
 		store.rainbowColor4 = this.settings.rainbow_color_4;
 		store.rainbowColor5 = this.settings.rainbow_color_5;
 	}
-	
+
 	patchCanvas(canvas: Canvas) {
 		const that = this;
 		this.register(
 			around(canvas.constructor.prototype as Canvas, {
-				requestSave (next) {
-					return function(...args: any[]) {
+				requestSave(next) {
+					return function (...args: any[]) {
 						that.app.workspace.trigger("quiet-outline:canvas-change");
-						return next.apply(this, args);	
+						return next.apply(this, args);
 					}
 				},
 				updateSelection(next) {
-					return function(...args: any[]) {
+					return function (...args: any[]) {
 						next.apply(this, args);
 						that.app.workspace.trigger("quiet-outline:canvas-selection-change", this.selection);
-						return;	
+						return;
 					}
-				},	
+				},
 			})
 		)
 	}
 
 	registerListener() {
+		// 事件：openepub打开epub
+		window.addEventListener('openepub-loaded', (event: CustomEvent<OpenEpubHeading[]>) => {
+			this.readDirectoryData(event.detail);
+		});
+
+
+
+
+		// TODO 事件: openepub的view翻页操作 
+
+	
 		this.registerEvent(this.app.workspace.on("css-change", () => {
 			store.dark = document.body.hasClass("theme-dark");
 			store.cssChange = !store.cssChange;
 		}));
-		
+
 		// remove states from closed notes
 		this.registerEvent(this.app.workspace.on("layout-change", () => {
 			const leaves = this.app.workspace.getLeavesOfType("markdown");
 			const filteredStates: Record<string, string[]> = {};
 			leaves.forEach((leaf) => {
 				const path = (leaf.view as MarkdownView).file.path;
-				this.heading_states[path] && 
+				this.heading_states[path] &&
 					(filteredStates[path] = this.heading_states[path]);
 			})
-
 			this.heading_states = filteredStates;
 		}));
-		
 
+
+		
 		const refresh = debounce(this.refresh_outline, 300, true);
 		this.registerEvent(this.app.metadataCache.on('changed', () => {
 			refresh("file-modify");
 		}));
-		
+
 		// @ts-ignore
 		this.registerEvent(this.app.workspace.on('quiet-outline:canvas-change', () => {
 			refresh();
@@ -179,18 +210,18 @@ export class QuietOutline extends Plugin {
 
 			// if selection is only 1 textNode or md fileNode, show md outline
 			// const component = [...selection][0];
-			const component =  Array.from(selection)[0];
+			const component = Array.from(selection)[0];
 			if (!component.hasOwnProperty("nodeEl")) return;
 
 			const node = component as CanvasNode;
-			
+
 			if (node.unknownData.type === "file" && (node as CanvasFileNode).file.extension === "md") {
 				const view = (node as CanvasFileNode).child as EmbedMarkdownView;
 				this.changeCurrentView(view, "embed-markdown-file");
 				return;
 			}
 
-			if (node.unknownData.type === "text" ) {
+			if (node.unknownData.type === "text") {
 				const view = (node as CanvasTextNode).child;
 				this.changeCurrentView(view, "embed-markdown-text")
 				return;
@@ -204,8 +235,7 @@ export class QuietOutline extends Plugin {
 			}
 
 			// block cursor change event to trigger auto-expand when switching between notes
-			this.block_cursor_change() 
-
+			this.block_cursor_change();
 			this.changeCurrentView(view, view.getViewType());
 		}));
 	}
@@ -219,7 +249,7 @@ export class QuietOutline extends Plugin {
 			const cache = this.app.metadataCache.getFileCache(current_file);
 			if (cache && cache.headings) {
 				// if markdown content has changed, calculate headings' diff to remain expanded state
-				if(reason === "file-modify") {
+				if (reason === "file-modify") {
 					store.modifyKeys = calcModifies(store.headers, cache.headings);
 				}
 				store.headers = cache.headings;
@@ -234,36 +264,69 @@ export class QuietOutline extends Plugin {
 			}
 		} else if (viewType === "embed-markdown-text") {
 			const { headings } = await parseMetaDataCache(this.app, (view as EmbedMarkdownView).text);
-			
+
 			store.headers = headings;
 			return;
-		}
+		} 
 		store.headers = [];
 	};
-	
+
+	cutOpenEpubHeadingsToHeadings(openEpubHeadings: OpenEpubHeading[]) {
+		const headers: Heading[] = []
+		openEpubHeadings.forEach(openEpubHeading => {
+			const heading: Heading = {
+				id: openEpubHeading.id.toString(),
+				level: openEpubHeading.level,
+				heading: openEpubHeading.lable,
+				position: {
+					start: {
+						line: 0,
+						col: 0,
+						offset: 0
+					},
+					end: {
+						line: 0,
+						col: 0,
+						offset: 0
+					}
+				}
+			}
+			headers.push(heading)
+		});
+		return headers
+	}
+
+
+
+
 	async changeCurrentView(view: LegalViewType, viewType: string) {
 		switch (viewType) {
-			case "markdown" :{
+			case "markdown": {
 				store.jumpBy = markdownJump
-				break;	
+				break;
 			}
-			case "kanban" :{
+			case "kanban": {
 				store.jumpBy = kanbanJump
-				break;	
+				break;
 			}
-			case "canvas" :{
-				if (!this.klasses["canvas"]) { this.patchCanvas((view as CanvasView).canvas)
+			case "canvas": {
+				if (!this.klasses["canvas"]) {
+					this.patchCanvas((view as CanvasView).canvas)
 					this.klasses["canvas"] = view.constructor as Constructor<any>;
 				}
 				store.jumpBy = canvasJump
-				break;	
+				break;
 			}
-			case "embed-markdown-file": 
-			case "embed-markdown-text" :{
+			case "openepub": {
+				store.jumpBy = openEpubJump
+				break;
+			}
+			case "embed-markdown-file":
+			case "embed-markdown-text": {
 				store.jumpBy = embedMarkdownJump;
-				break;	
+				break;
 			}
-			default : {
+			default: {
 				store.jumpBy = dummyJump
 				break;
 			}
@@ -282,17 +345,19 @@ export class QuietOutline extends Plugin {
 			return;
 		}
 
+		// 如果路径相同，则不刷新
 		const pathEq = path === this.current_file;
 		if (!pathEq) {
 			store.refreshTree();
 		}
 
 		this.current_note = view;
-		this.current_file = path; 
+		this.current_file = path;
 		this.current_view_type = viewType;
 		this.refresh_outline();
+
 		return;
-		
+
 	}
 
 	registerCommand() {
@@ -329,7 +394,7 @@ export class QuietOutline extends Plugin {
 			callback: async () => {
 				function merge(arr1: string[], arr2: string[]) {
 					return Array(arr1.length + arr2.length).fill("")
-						.map((_, i) => i % 2 === 0 ? arr1[i / 2] : arr2[(i - 1) / 2])	
+						.map((_, i) => i % 2 === 0 ? arr1[i / 2] : arr2[(i - 1) / 2])
 				}
 
 				const parts = this.settings.export_format.split(/\{.*?\}/);
@@ -340,9 +405,9 @@ export class QuietOutline extends Plugin {
 					const fields = keys.map(key => {
 						switch (key) {
 							case "title": {
-								return h.heading	
+								return h.heading
 							}
-							case "path" : {
+							case "path": {
 								return "#" + h.heading.replace(/ /g, "%20")
 							}
 							case "bullet": {
@@ -357,14 +422,14 @@ export class QuietOutline extends Plugin {
 						}
 						const match = key.match(/num-nest\[(.*?)\]/);
 
-						if(match) {
+						if (match) {
 							const sep = match[1];
-							return nums.slice(0, h.level).join(sep);	
+							return nums.slice(0, h.level).join(sep);
 						}
-						
+
 						return ""
 					});
-					
+
 					return merge(parts, fields).join("");
 				}
 
@@ -372,7 +437,7 @@ export class QuietOutline extends Plugin {
 				const headers: string[] = [];
 				store.headers.forEach((h) => {
 					nums.forEach((num, i) => {
-						if(i > h.level - 1) {
+						if (i > h.level - 1) {
 							nums[i] = 0
 						}
 					})
@@ -388,7 +453,7 @@ export class QuietOutline extends Plugin {
 		});
 
 	}
-	
+
 	registerExt() {
 		this.registerEditorExtension([
 			editorEvent
@@ -425,17 +490,17 @@ export class QuietOutline extends Plugin {
 	}
 
 }
-export function dummyJump(plugin: QuietOutline, key: number) {}
+export function dummyJump(plugin: QuietOutline, key: number) { }
 
 function markdownJump(plugin: QuietOutline, key: number) {
-    const line: number = store.headers[key].position.start.line;
+	const line: number = store.headers[key].position.start.line;
 
-    // const view = store.plugin.app.workspace.getActiveViewOfType(MarkdownView)
-    const view = plugin.current_note as MarkdownView;
-    if (view) {
+	// const view = store.plugin.app.workspace.getActiveViewOfType(MarkdownView)
+	const view = plugin.current_note as MarkdownView;
+	if (view) {
 		const cursor = {
-			from: {line, ch: 0},
-			to: {line, ch: 0},
+			from: { line, ch: 0 },
+			to: { line, ch: 0 },
 		}
 		const state = {
 			line,
@@ -443,19 +508,19 @@ function markdownJump(plugin: QuietOutline, key: number) {
 		}
 
 		plugin.jumping = true;
-        view.setEphemeralState(state);
-        setTimeout(() => {
+		view.setEphemeralState(state);
+		setTimeout(() => {
 			plugin.jumping = false;
 			// view.setEphemeralState({cursor});
 		}, 500);
-    }
+	}
 }
 
 function kanbanJump(plugin: QuietOutline, key: number) {
 	const panes = document.querySelectorAll(
 		'.workspace-leaf[style=""] .kanban-plugin__lane-wrapper'
 	);
-	
+
 	panes[key]?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
 }
 
@@ -468,16 +533,37 @@ function canvasJump(plugin: QuietOutline, key: number) {
 	const nodes: Map<string, AllCanvasNodeData> = (plugin.current_note as any).canvas.nodes;
 	const node = nodes.get(store.headers[key].id);
 	if (node !== undefined) {
-		(plugin.current_note as any).canvas.zoomToBbox(node.bbox);	
+		(plugin.current_note as any).canvas.zoomToBbox(node.bbox);
 	}
 }
+
+function openEpubJump(plugin: QuietOutline, key: number) {
+	// TODO: 让OpenEpub插件跳转到指定的节点
+	const openepub = this.app.plugin.getPlugin("obsidian-open-epub-plugin");
+	console.log("open-epub-plugin", openepub)
+	openepub.jumpById();
+
+}
+
+// function getOpenEpubHeadings(){
+// 	console.log("app: ", this.app)
+// 	console.log(this.app.plugin)
+// 	const openepub = this.app.plugin.getPlugin("obsidian-open-epub-plugin");
+// 	openepub.getOpenEpubbHeadings();	
+// }
+
+export function updateOpenEpubHeadings(headings: Heading[]) {
+	// store.headers = headings
+	console.log("headings更新完毕")
+}
+
 
 function canvasNodesToHeaders(nodes: AllCanvasNodeData[]): Heading[] {
 	// const groups = nodes.filter(node => node.type === "group").sort((a, b) => - cmpArea(a, b));
 	const nodesDec = nodes.slice().sort((a, b) => - cmpArea(a, b));
 
 	const trees: TreeNode[] = [];
-	for(let i = 0; i < nodesDec.length; i++) {
+	for (let i = 0; i < nodesDec.length; i++) {
 		insert(trees, nodesDec[i]);
 	}
 
@@ -489,11 +575,10 @@ function canvasNodesToHeaders(nodes: AllCanvasNodeData[]): Heading[] {
 			id: node.id,
 			icon: chooseIcon(node),
 			position: {
-				start: {line: 0, col: 0, offset: 0},
-				end: {line: 0, col: 0, offset: 0},
+				start: { line: 0, col: 0, offset: 0 },
+				end: { line: 0, col: 0, offset: 0 },
 			}
 		})
-		
 	})
 	return heads
 }
@@ -511,16 +596,16 @@ function chooseIcon(node: AllCanvasNodeData): SupportedIcon {
 	if (node.type === "file") {
 		if (node.file.endsWith(".md")) {
 			return "ArticleOutlined";
-		}	
+		}
 		if (node.file.endsWith(".mp3")) {
 			return "AudiotrackOutlined";
-		}	
+		}
 		if (node.file.endsWith(".mp4")) {
 			return "OndemandVideoOutlined";
-		}	
+		}
 		if (node.file.endsWith(".png") || node.file.endsWith(".jpg")) {
 			return "ImageOutlined";
-		}	
+		}
 	}
 	return "FilePresentOutlined";
 }
@@ -533,7 +618,7 @@ function cmpArea(a: AllCanvasNodeData, b: AllCanvasNodeData) {
 const cacheTitle: Record<string, string> = {};
 function text(node: AllCanvasNodeData): string {
 	let text: string;
-	switch(node.type) {
+	switch (node.type) {
 		case "text": {
 			text = node.text.split("\n")[0];
 			text = text.slice(text.search(/[^#\s].*/));
@@ -555,7 +640,7 @@ function text(node: AllCanvasNodeData): string {
 					.then(res => {
 						cacheTitle[node.url] = /<title>(.*)<\/title>/.exec(res)[1];
 					})
-					.catch(() => {});
+					.catch(() => { });
 			}
 			break;
 		}
@@ -568,17 +653,17 @@ function text(node: AllCanvasNodeData): string {
 }
 
 
-type TreeNode = {node:AllCanvasNodeData, children: TreeNode[]}
-function traverse(trees: TreeNode[], level: number,  callback: (node: AllCanvasNodeData, level: number) => void) {
-	for(let i = 0; i < trees.length; i++) {
+type TreeNode = { node: AllCanvasNodeData, children: TreeNode[] }
+function traverse(trees: TreeNode[], level: number, callback: (node: AllCanvasNodeData, level: number) => void) {
+	for (let i = 0; i < trees.length; i++) {
 		callback(trees[i].node, level);
 		traverse(trees[i].children, level + 1, callback);
-	}	
+	}
 }
 function insert(trees: TreeNode[], node: AllCanvasNodeData) {
 	let insertToChildren = false;
 
-	for(let i = 0; i < trees.length; i++) {
+	for (let i = 0; i < trees.length; i++) {
 		if (trees[i].node.type === "group" && isInside(node, trees[i].node)) {
 			insertToChildren = true;
 			insert(trees[i].children, node);
@@ -594,7 +679,7 @@ function insert(trees: TreeNode[], node: AllCanvasNodeData) {
 
 /**
  * a inside b
- **/ 
+ **/
 function isInside(a: AllCanvasNodeData, b: AllCanvasNodeData): boolean {
 	return (
 		a.x >= b.x
@@ -608,15 +693,15 @@ function isInside(a: AllCanvasNodeData, b: AllCanvasNodeData): boolean {
 function embedMarkdownJump(plugin: QuietOutline, key: number) {
 	const view = plugin.current_note as EmbedMarkdownView;
 	const line = store.headers[key].position.start.line;
-	setEphemeralState(view, {line});
+	setEphemeralState(view, { line });
 }
 
-export function setEphemeralState(view: EmbedMarkdownView, option: {line: number}) {
+export function setEphemeralState(view: EmbedMarkdownView, option: { line: number }) {
 	if (view.getMode() === "source") {
 		editorScroll(view.editMode.editor, option.line);
 	} else {
-		previewScroll(view.previewMode.renderer, option.line);	
-	}	
+		previewScroll(view.previewMode.renderer, option.line);
+	}
 }
 
 function editorScroll(editor: Editor, line: number) {
@@ -626,9 +711,9 @@ function editorScroll(editor: Editor, line: number) {
 	}
 	editor.addHighlights([selection], "is-flashing", true, true);
 	editor.setCursor(selection.from);
-	editor.scrollIntoView(selection, true);	
+	editor.scrollIntoView(selection, true);
 }
 
 function previewScroll(renderer: MarkdownPreviewRenderer, line: number) {
-	renderer.applyScroll(line, {highlight: true, center: true});	
+	renderer.applyScroll(line, { highlight: true, center: true });
 }
